@@ -1,0 +1,376 @@
+---
+title: "Energy_customer_insight"
+output: html_notebook
+---
+
+
+```{r Load required library}
+require(data.table)
+require(tidyverse)
+require(ggplot2)
+require(dplyr)
+require(corrplot)
+```
+
+
+```{r Load data for prep}
+dt1 <- fread("task_data_file1.csv")
+dt2 <- fread("task_data_file2.csv")
+```
+
+#merge data.
+```{r set unique key to value for the purpose of merging}
+dt1 <- dt1[, houseid:=as.numeric(houseid)] #converting "houseid" to numeric to make all attributes numeric and for easy merge with other table.
+energy <-dt1[dt2, on = "houseid"] #merge by unique key to formm new data "energy"
+```
+
+#Exploratory Data Analysis
+```{r}
+summary(energy)
+energy <- na.omit(energy)
+```
+
+the data seem fairly clean enough, however we treated the few missing values by removing them. Futhermore, the mean and median distance seems reasonably close, which suggests that the data is symmetric but `HH_week "5','6','9' and avetemp_week 3,8` appear to left skewed or have outliers
+
+
+
+# Multivariate Analysis.
+To analyse the correlation between the variables we can explore `library corrplot` 
+```{r}
+hh_wk <- select_if(energy, is.numeric)
+m<- cor(hh_wk)
+corrplot(m, type = "upper", order = "hclust")
+```
+The simple correlation plots show how Hours in week "1",2,3,4,8,10, 7 variables are highly related, but this leaves open
+the question as to whether there are any underlying relations between the entire
+set. 7 out of 10 `HH_Week` are correlated, as high cor is denoted by deep blue which is closer to 1.0.
+similar story is to said about `avetemp`
+
+we can a more closer look at the partitioned average temperature.
+```{r}
+avgtemp <- select_if(energy[,11:19], is.numeric)
+n<- cor(avgtemp)
+corrplot(n, type = "upper", order = "hclust")
+```
+
+
+We can likewise explore table form of corelated variables to analysing multiple correlation. 
+```{r}
+m
+```
+
+
+Let's quickly examine the data by plotting density distributions of variables.
+```{r}
+energy %>% 
+  gather() %>%
+  ggplot(aes(x = value)) +
+    facet_wrap(~ key, scales = "free", ncol = 4) +
+    geom_density() #using geom_density because thevariable is numeric
+
+```
+The summary statistics, and the density plots for the distributions show several interesting features. The distribution is clearly multimodal. caution should also be taken beacause what you think you see in a histogram may not be a particularly accurate impression of the data. The rule of thumb always should be variations in bin width and bin origin in relation should be robust each time.
+
+
+```{r}
+set.seed(2019)
+brks <- c(0, 21, 35, 45, 60, 70, Inf)
+age_group <- cut(energy$ave_age, breaks = brks, labels = c("Youth", "Young_Adult", "Matured_Adult", "Senior_Adult", "Old", "70_Above"))
+age.tab = cbind(energy, age_group)
+table(g$age_group)
+prop.table(table(g$age_group))
+```
+I generally avoid bining but Sometimes a distribution naturally lends itself to a set of classes, in which case dichotomization will actually give you a higher degree of accuracy than a continuous function. Now we can see from the table that 0ver 80% of the customers are just between 3 age groups, "Young adult", senior adult and "over 70"
+
+
+```{r}
+age.tab %>%
+  select_if(is.factor) %>%
+  select(age_group) %>%
+  gather() %>%
+  ggplot(aes(x = value)) +
+    facet_wrap(~ key, scales = "free", ncol = 3) +
+    geom_bar()
+```
+
+above is a better view of age group distribution. 
+
+
+```{r}
+par(mfrow=c(2,2))
+age.tab %>%
+
+  ggplot(aes(HH_Week1, age_group, color = age_group)) +
+
+  geom_smooth(method = "loess", span = 1/2, se = FALSE)
+
+age.tab %>%
+
+  ggplot(aes(avetemp_Week1, age_group, color = age_group)) +
+
+  geom_smooth(method = "loess", span = 1/2, se = FALSE)
+
+age.tab %>%
+
+  ggplot(aes(HH_Week10, age_group, color = age_group)) +
+
+  geom_smooth(method = "loess", span = 1/2, se = FALSE)
+
+age.tab %>%
+
+  ggplot(aes(avetemp_Week10, age_group, color = age_group)) +
+
+  geom_smooth(method = "loess", span = 1/2, se = FALSE)
+
+```
+
+As illustrated above, from week 1 and week 10, it could be inferred that no significant change in energy usage was observed. Customers are consistent with the pattern of energy consumption with respect to age. Youth - customers between ages of 14 to 20 spend lesser time heating up and also have low record temperature usage. While Customers above age 70-above have highest record of average temperature per week. Although they spend lesser hour per week on heating unlike "matured adult" who are in there 40s.
+
+
+
+# Identify and Remove outliers
+
+```{r}
+par(mfrow=c(2,2))
+hist(hh_wk$HH_Week6)
+boxplot(hh_wk$HH_Week6, horizontal = T)
+hist(hh_wk$HH_Week5)
+boxplot(hh_wk$HH_Week5, horizontal = T) 
+
+```
+FRom boxplot, some of the attributes have outliers. Also thehistogram is highly skewed to the left.
+
+```{r}
+mod <- lm(ave_age ~ ., data=energy)
+cooksd <- cooks.distance(mod)
+```
+##Cooks Distance
+ Cook's distance is useful for finding outliers in the data. It also shows the influence of each observation on the fitted response values. An observation with Cook's distance larger than three times the mean Cook's distance might be an outlier.
+```{r}
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
+abline(h = 4*mean(cooksd, na.rm=T), col="red")  # add cutoff line
+text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4*mean(cooksd, na.rm=T),names(cooksd),""), col="red")  # add
+```
+from the plot outliers show the no of times it is distant from the cut-off mean.
+ 
+```{r}
+influential <- as.numeric(names(cooksd)[(cooksd > 4*mean(cooksd, na.rm=T))])  # influential row numbers
+head(energy[influential, ])  # influential observations.
+```
+
+we can see from cook perspective, the culprit for the outliers. only 3 rows outlier changed the the distribution of the dataset.
+
+
+delete outliers since the value is unreasonable and rows involved are not much 
+```{r} 
+
+age.rm.out <- age.tab[,.SD[c(-2301, -2248,- 2760, -199)]]
+age.rm.out2 <- na.omit(age.rm.out) #Given that NA is not permitted in subsequent step, all NAs were removed in the dataset using the above code.
+```
+
+
+
+```{r}
+temp <- aggregate(age.rm.out2$age_group, by =list(age.rm.out2$age_group,
+age.rm.out2$HH_Week3), FUN =length)
+names(temp) <- c( "age", "hourly.usage.per.wk", "count")
+
+```
+having removed the outliers let see how customers number of hours customers leave their heating on for an average week.
+
+```{r}
+ggplot(temp, aes(age, hourly.usage.per.wk , group=factor(age))) + geom_line(aes(color=factor(age)))
+```
+
+Age under 35 are prudent in energy usage per week. while older ones from age 45 to 70s lost control of energy usage. those in their 60s have never used below 140hours per week. 
+
+
+
+## PCA
+
+In the second phase of data preprocessing, we combine those variables into a smaller number of easily interpretable key indicators. To do this, we use PCA. The main function of PCA is to reduce the dimensionality of
+a data set of a correlated variables while retaining as much of the variation within the data set as
+possible.
+
+To facilitate interpretation of the results, we choose to conduct two separate PCAs, one for
+variables directly related to the "duration of energy consumption" and one for variables directly related to the "average temperature" used each week.
+
+We start selecting from the 10 variables related to the `HH_week` 
+```{r}
+hh_wk1 <- select_if(age.rm.out2[, 1:10], is.numeric) # selecting variables from weekly hours OF USAGE
+```
+
+Below, we build a PCA function that calculates eigenvalues, loadings, and scores using the princomp command
+
+
+#PCA for weekly hours OF USAGE
+```{r}
+ X=hh_wk1
+PCA <- function(X, b) {
+ pca <- princomp(X, cor = T, scores = T)
+ loadings <- pca$loadings
+ week.hours <- pca$scores[,1:b]
+ Rot <- varimax(loadings[,1:b])
+ list(eigvals=(pca$sdev)^2, loadings =loadings, week.hours = week.hours,
+ loadings.rot=Rot$loadings, week.hours.rot =scale(week.hours)%*%Rot$rotmat)
+}
+```
+The output of the function is an object of class list with five components
+
+
+
+```{r}
+dims = 2
+pca <- PCA(X,dims)
+```
+
+```{r}
+p <- length(pca$eigvals)
+plot(pca$eigvals, xaxp =c(1,p,p-1), type ="b", main = "Scree Plot",
+ xlab = "Principal Components", ylab = "Eigenvalues")
+lines(c(0,p +1),c(1,1),lty = "dashed")
+text(pca$eigvals, as.character(round(pca$eigvals,digits = 2)), 
+ cex = 0.6, pos= c(4,4,4,4,3,3))
+plot(100*cumsum(pca$eigvals)/p, xaxp = c(1,p,p-1), type = "b",
+ xlab = "Principal Components", ylab = "CVAF (%)",
+  main = "Cumulative Variance Accounted For")
+ text(100*cumsum(pca$eigvals)/p,
+ as.character(round((cumsum(pca$eigvals)/p)*100,digits = 1)),
+ cex = 0.6, pos =c(4,4,4,2,1,1))
+```
+
+The commonly used rule for retaining a PC is that its eigenvalue be greater than 1.0. only one
+of our PCs meet this eigenvalue cutoff. one variable explains 99% of the variance form the CVAF. b = 1PCs. but in practice b>1
+For interpretation of the rotated solution, we refer to the loadings generated using the code:
+
+```{r}
+print(pca$loadings.rot, cutoff=0)
+plot(pca$loadings.rot)
+```
+For ease of interpretation, a common practice is to change the sign of a PC if it is
+negatively correlated with the variables having the greatest weight in its linear combination.
+In this case we change the sign of PC1, with the following code
+
+```{r}
+pca$loadings.rot[,1] <- -pca$loadings.rot[,1]
+```
+
+
+
+```{r}
+pca.weeklyhours <- pca$week.hours.rot
+tail(pca.weeklyhours, 5)
+```
+
+#PCA for weekly hours OF USAGE 
+In the second analysis, we select from `avetemp` the ten variables describing the the average temperature used by each household.
+
+```{r}
+avgtemp1 <- select_if(age.rm.out2[,11:20], is.numeric) # selecting variables from weekly TEMP usage 
+```
+We can use exactly the same code lines presented for the weekly hours' PCA:
+```{r}
+ y=avgtemp1
+PCA1 <- function(y, b) {
+ pca <- princomp(y, cor = T, scores = T)
+ loadings <- pca$loadings
+ avg.temp <- pca$scores[,1:b]
+ Rot <- varimax(loadings[,1:b])
+ list(eigvals=(pca$sdev)^2, loadings =loadings, avg.temp = avg.temp,
+ loadings.rot=Rot$loadings, avg.temp.rot =scale(avg.temp)%*%Rot$rotmat)
+}
+```
+The output of the function is an object of class list with five components
+
+
+
+```{r}
+dims1 = 3
+pca <- PCA1(y,dims1)
+```
+
+```{r}
+p <- length(pca$eigvals)
+plot(pca$eigvals, xaxp =c(1,p,p-1), type ="b", main = "Screen Plot",
+ xlab = "Principal Components", ylab = "Eigenvalues")
+lines(c(0,p +1),c(1,1),lty = "dashed")
+text(pca$eigvals, as.character(round(pca$eigvals,digits = 2)), 
+ cex = 0.6, pos= c(4,4,4,4,3,3))
+plot(100*cumsum(pca$eigvals)/p, xaxp = c(1,p,p-1), type = "b",
+ xlab = "Principal Components", ylab = "CVAF (%)",
+  main = "Cumulative Variance Accounted For")
+ text(100*cumsum(pca$eigvals)/p,
+ as.character(round((cumsum(pca$eigvals)/p)*100,digits = 1)),
+ cex = 0.6, pos =c(4,4,4,2,1,1))
+```
+
+The commonly used rule for retaining a PC is that its eigenvalue be greater than 1.0. two
+of our PCs meet this eigenvalue cutoff. Thanks to the addition of the 2nd PC, the percentage of
+CVAF increases from 84% to 94%. This gives us a total of b =2 PCs.
+For interpretation of the rotated solution, we refer to the loadings generated using the code:
+```{r}
+print(pca$loadings.rot, cutoff=0) 
+
+pca$loadings.rot[,c(1,2)] <- -pca$loadings.rot[,c(1,2)]
+```
+
+```{r}
+pca.avgtemp <- pca$avg.temp.rot
+```
+
+Finally, the six composite indicators obtained by the two PCAs are collected in a unique data
+frame (pc.data) with dimension
+```{r}
+ pc.data<- data.frame(pca.avgtemp, pca.weeklyhours)
+names(pc.data) <- c("pca.avetemp", "pca.avetemp1", "pca.avetemp2", "pca.hh_wk1", "pca.hh_wk2") # Rename column
+```
+
+## clustering using Kmeans
+
+The goal pursued here is to separate age into different groups depending on their energy consumption. 
+
+The decision about which variables to use for clustering is a critically important decision that will have a big impact on the clustering solution. We have already reduced our variables. thanks to PCA. We will merge the new variables with scaled `average age` and perform cluster analysis.
+
+Clustering will help find homogeneous subgroups among energy users.
+
+```{r}
+age.scale <- data.frame(scale(energy.rm.out2[,22])) #scaling age distribution
+age.group <- age.rm.out2[,23]
+names(age.group) = ("agegroup")
+pc.age <- data.frame(pc.data,age.scale,age.group) #merge pc and scaled age.
+
+
+```
+
+```{r}
+d <- dist(pc.age, method="euclidean") #Create the distance matrix
+energy.fit <- hclust(d, method="ward") 
+plot(energy.fit, labels=pc.age$agegroup)
+#from the plot we can see that the initial cluster is 5
+
+groups <- cutree(energy.fit, k=3) #cut the tree to extract the hclust object
+
+
+```
+
+```{r}
+print_clusters <- function(labels, k) {
+for(i in 1:k) {
+print(paste("cluster", i))
+print(pc.age[labels==i,c("pca.avetemp","pca.avetemp1", "pca.avetemp2", "pca.hh_wk1", "pca.hh_wk2", "ave_age", "agegroup")])
+}
+}  # convenience function for printing out the ages in each cluster, along with the values for temperature ,age,and hours usage consumption.
+
+print_clusters(groups, 3)
+```
+
+We can see clusters of customers based on behaviour. Customers are grouped in clusters of similar behaviour
+
+
+##Conclusion
+
+In the given task, I have decided to use hiererchical clustering analysis. data set contains highly correlated variables. High correlation are observed between similar variables. The dimension of those variables were reduced using PCA. Dimension of hourly `consumption per week` and `Average temperature used` were done seperately and merged together to create a new data 
+
+Task was completed using various libraries and functions some of which i created for the purpose of task.
+
+
